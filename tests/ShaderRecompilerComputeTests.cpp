@@ -11293,6 +11293,101 @@ public:
     std::printf("[gpu]     %-32s ok\n", name);
   }
 
+  void CheckNullComparisonDepthTexture() {
+    constexpr const char *name = "NullComparisonDepthTexture";
+    EnsureRuntimeContext();
+    RenderContext context(m_runtime_context);
+    auto &scheduler = context.GetCommandScheduler();
+    HW::Context registers{};
+    HW::UserConfig user_config{};
+    HW::Shader shaders{};
+    scheduler.Begin(registers, user_config, shaders);
+    auto &cache = context.GetTextureCache();
+    auto &executor = context.GetRenderExecutor();
+
+    TestCase test;
+    test.name = name;
+    test.has_user_data = true;
+    ShaderSamplerResource sampler_descriptor{{1u << 12u, 0, 1u << 24u, 0}};
+    std::copy_n(sampler_descriptor.fields, 4, test.user_data.begin() + 8);
+    test.user_data[50] = sizeof(uint32_t);
+    test.opcodes = {ShaderOpcode::V_MOV_B32, ShaderOpcode::IMAGE_SAMPLE,
+                    ShaderOpcode::BUFFER_STORE_DWORD, ShaderOpcode::S_ENDPGM};
+    test.required_spirv = {"OpImageSampleDrefExplicitLod"};
+    AppendVMovLiteral(&test.code, 20, std::bit_cast<uint32_t>(0.5f));
+    AppendVMovLiteral(&test.code, 21, std::bit_cast<uint32_t>(0.5f));
+    AppendVMovLiteral(&test.code, 22, std::bit_cast<uint32_t>(0.5f));
+    test.code.push_back(EncodeMimg0(0x2f, 1, 0, false, 1));
+    test.code.push_back(EncodeMimg1(0, 20, 0, 2));
+    AppendStoreVgpr(&test.code, 0, 0);
+    AppendEnd(&test.code);
+    test.expected = {0};
+    const auto compiled = CompileCase(test, SubgroupSize());
+    Require(name, "comparison resource",
+            compiled.program.info.images.size() == 1 &&
+                compiled.program.info.images[0].depth_compare,
+            "null descriptor lost comparison sampling semantics");
+    ShaderRecompiler::IR::DescriptorValue null_descriptor{};
+    null_descriptor.dword_count = 8;
+    auto binding = RenderExecutorTestAccess::ResolveTexture(
+        executor, compiled.program.info.images[0], null_descriptor);
+    const auto view = cache.FindTexture(binding.image_id, binding.desc);
+    auto &image = cache.GetImage(binding.image_id);
+    vk::FormatProperties3 format_properties{};
+    vk::FormatProperties2 format_properties2{};
+    format_properties2.pNext = &format_properties;
+    m_runtime_context.physical_device.getFormatProperties2(
+        image.info.pixel_format, &format_properties2);
+    Require(name, "native comparison format",
+            view != nullptr && image.info.IsDepth() &&
+                (format_properties.optimalTilingFeatures &
+                 vk::FormatFeatureFlagBits2::eSampledImageDepthComparison),
+            "null comparison descriptor selected a color format without depth "
+            "comparison support");
+    auto ordinary_resource = compiled.program.info.images[0];
+    ordinary_resource.depth_compare = false;
+    auto ordinary = RenderExecutorTestAccess::ResolveTexture(
+        executor, ordinary_resource, null_descriptor);
+    Require(name, "separate ordinary null image",
+            ordinary.image_id != binding.image_id &&
+                cache.GetImage(ordinary.image_id).info.pixel_format ==
+                    vk::Format::eR32Sfloat,
+            "comparison sampling changed the ordinary float null image");
+
+    // Exercise a native comparison against both sides of the reference value.
+    auto output = CreateStorageBuffer(name, {}, test.expected.size());
+    const auto sampler = context.GetSamplerCache().GetSampler(
+        sampler_descriptor, compiled.program.info.samplers[0].integer_border);
+    for (const float depth : {0.f, 1.f}) {
+      image.Transit(vk::ImageLayout::eTransferDstOptimal,
+                    vk::AccessFlagBits2::eTransferWrite, {},
+                    scheduler.Current().Handle());
+      const vk::ImageSubresourceRange range{vk::ImageAspectFlagBits::eDepth, 0,
+                                            1, 0, 1};
+      const vk::ClearDepthStencilValue clear{depth, 0};
+      scheduler.Current().Handle().clearDepthStencilImage(
+          image.backing.image, vk::ImageLayout::eTransferDstOptimal, &clear, 1,
+          &range);
+      image.Transit(vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+                    vk::AccessFlagBits2::eShaderRead, {},
+                    scheduler.Current().Handle());
+      scheduler.Finish();
+      Image sampled;
+      sampled.view = view;
+      sampled.layout = image.backing.state.layout;
+      Dispatch(test, compiled, output, nullptr, &sampled, nullptr, nullptr,
+               sampler);
+      const std::vector<uint32_t> expected{depth == 0.f ? 0u : 0x3f800000u};
+      Require(name, "native null comparisons",
+              ReadBuffer(name, output, 1) == expected,
+              "comparison sampling did not return the native depth comparison "
+              "result");
+    }
+    DestroyBuffer(&output);
+    scheduler.Finish();
+    std::printf("[gpu]     %-32s ok\n", name);
+  }
+
   void CheckComparisonDepthTexture() {
     constexpr const char *name = "ComparisonDepthTexture";
     constexpr uintptr_t base = 0x0000000204200000ull;
@@ -42578,9 +42673,15 @@ int main(int argc, char **argv) {
     VulkanHarness vulkan;
     CheckSampledDepthResource();
     CheckDepthTextureEncoding();
+    vulkan.CheckNullComparisonDepthTexture();
     vulkan.CheckComparisonDepthTexture();
     vulkan.CheckRasterization(true);
     RunCase(nullptr, ImageSampleA16CompareBiasRdna2AddressOrder());
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--null-depth-comparison-only") == 0) {
+    VulkanHarness vulkan;
+    vulkan.CheckNullComparisonDepthTexture();
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--indirect-image-only") == 0) {
@@ -42679,6 +42780,7 @@ int main(int argc, char **argv) {
   CheckSampledDepthResource();
   CheckDepthTextureEncoding();
   vulkan.CheckSamplerBorderColors();
+  vulkan.CheckNullComparisonDepthTexture();
   if (rasterization) {
     vulkan.CheckComparisonDepthTexture();
     vulkan.CheckRasterization(true);
