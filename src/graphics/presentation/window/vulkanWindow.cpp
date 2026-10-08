@@ -11,6 +11,7 @@
 #include "common/threads.h"
 #include "common/timer.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/gpuCrashMarkers.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/vulkanCommon.h"
@@ -1028,6 +1029,9 @@ void WindowContext::CreateVulkan() {
 			device_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 			graphic_ctx.memory_budget_ext_enabled = true;
 		}
+		if (GpuCrashMarkersRequested() && HasExtension(available_extensions, VK_AMD_BUFFER_MARKER_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+		}
 		for (const auto* extension: {VK_EXT_DEVICE_FAULT_EXTENSION_NAME,
 		                             VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
 		                             VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME,
@@ -1060,6 +1064,9 @@ void WindowContext::CreateVulkan() {
 
 	if (!graphic_ctx.CreateAllocator()) {
 		EXIT("Could not create Vulkan memory allocator");
+	}
+	if (HasExtension(device_extensions, VK_AMD_BUFFER_MARKER_EXTENSION_NAME)) {
+		InitializeGpuCrashMarkers(graphic_ctx);
 	}
 
 	render_context = std::make_unique<RenderContext>(graphic_ctx);

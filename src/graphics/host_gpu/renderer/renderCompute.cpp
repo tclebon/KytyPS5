@@ -11,6 +11,7 @@
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/guest_gpu/pm4.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/gpuCrashMarkers.h"
 #include "graphics/host_gpu/renderer/image/imageInfo.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
@@ -430,7 +431,11 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	}
 
 	vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
+	const auto marker = BeginGpuCrashMarker(m_context.GetGraphics(), vk_buffer,
+	    {.submit = submit_id, .shader0 = compute_program.id, .hash0 = program.shader_hash,
+	     .kind = 2, .x = thread_group_x, .y = thread_group_y, .z = thread_group_z});
 	vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+	EndGpuCrashMarker(m_context.GetGraphics(), vk_buffer, marker);
 
 	// The removed host fence also ordered read-only dispatches before later writers.
 	ShaderAccessBarrier(vk_buffer, vk::PipelineStageFlagBits::eComputeShader);
@@ -491,7 +496,11 @@ void RenderExecutor::DispatchIndirect(uint64_t submit_id, CommandBuffer& buffer,
 	                          vk::PipelineStageFlagBits::eDrawIndirect, {},
 	                          1, &barrier, 0, nullptr, 0, nullptr);
 	vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
+	const auto marker = BeginGpuCrashMarker(m_context.GetGraphics(), vk_buffer,
+	    {.submit = submit_id, .shader0 = compute_program.id, .hash0 = program.shader_hash,
+	     .kind = 3, .x = static_cast<uint32_t>(args_addr), .y = static_cast<uint32_t>(args_addr >> 32u)});
 	vk_buffer.dispatchIndirect(args_buffer->Handle(), args_offset);
+	EndGpuCrashMarker(m_context.GetGraphics(), vk_buffer, marker);
 	ShaderAccessBarrier(vk_buffer, vk::PipelineStageFlagBits::eComputeShader);
 	ResetBindings();
 }

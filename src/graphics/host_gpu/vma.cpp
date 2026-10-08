@@ -18,6 +18,7 @@
 #include "common/logging/log.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/gpuCrashMarkers.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -56,6 +57,7 @@ void GraphicContext::DestroyAllocator() {
 	if (allocator == nullptr) {
 		return;
 	}
+	DestroyGpuCrashMarkers(*this);
 	vmaDestroyAllocator(allocator);
 	allocator = nullptr;
 }

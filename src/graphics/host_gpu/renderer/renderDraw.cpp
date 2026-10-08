@@ -13,6 +13,7 @@
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/guest_gpu/tile.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/gpuCrashMarkers.h"
 #include "graphics/host_gpu/renderer/colorRenderTarget.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
@@ -1149,6 +1150,11 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		SetDrawDebugPhase(buffer, submit_id, draw, 0x400u);
 	}
 	m_context.GetCommandScheduler().BeginRendering(rendering);
+	const auto marker = BeginGpuCrashMarker(m_context.GetGraphics(), vk_buffer,
+	    {.submit = submit_id, .shader0 = state.programs.vertex[0].id, .shader1 = state.programs.pixel.id,
+	     .hash0 = state.vertex_info[0].stage.program->shader_hash,
+	     .hash1 = state.ps_active ? state.ps_input_info.stage.program->shader_hash : 0,
+	     .kind = 1, .x = draw.index_count, .y = draw.instance_count});
 	vk_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.pipeline);
 	if (!draw.IsIndexed()) {
 		SetDrawDebugPhase(buffer, submit_id, draw, 0x500u);
@@ -1176,6 +1182,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		ShaderWriteBarrier(vk_buffer, shader_write_stages);
 	}
 	LogDrawPhase(draw.Name(), "DrawComplete");
+	EndGpuCrashMarker(m_context.GetGraphics(), vk_buffer, marker);
 	if (!draw.IsIndexed()) {
 		SetDrawDebugPhase(buffer, submit_id, draw, 0x700u);
 	}

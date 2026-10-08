@@ -3,10 +3,12 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "graphics/guest_gpu/gpu_defs.h"
+#include "graphics/host_gpu/gpuCrashMarkers.h"
 #include "graphics/host_gpu/graphicContext.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +17,8 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 namespace Libs::Graphics {
 namespace {
+
+std::atomic<std::string (*)(GraphicContext&)> fault_extra_info {nullptr};
 
 struct FormatMapping {
 	Prospero::BufferFormat guest;
@@ -118,6 +122,10 @@ constexpr auto kFormatLookup = MakeFormatLookup();
 
 } // namespace
 
+void RegisterGpuFaultExtraInfo(std::string (*provider)(GraphicContext&)) {
+	fault_extra_info.store(provider, std::memory_order_release);
+}
+
 void ReportDeviceFault(GraphicContext& graphics) {
 	// Other failing threads must wait for the first report before terminating.
 	std::lock_guard lock(graphics.device_fault_report_mutex);
@@ -183,6 +191,10 @@ void ReportDeviceFault(GraphicContext& graphics) {
 					binary.clear();
 				}
 			}
+		}
+		if (const auto provider = fault_extra_info.load(std::memory_order_acquire);
+		    provider != nullptr) {
+			report += provider(graphics);
 		}
 		Log::WriteToConsoleAndLog(report);
 		std::error_code             error;
