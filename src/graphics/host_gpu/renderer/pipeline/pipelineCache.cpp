@@ -268,6 +268,9 @@ struct PipelineCache::ProgramCache {
 
 		const auto module = CompileSPV(result.spirv, device);
 		EXIT_IF(module == nullptr);
+		const auto shader_id = ++next_shader_id;
+		Log::WriteToConsoleAndLog(fmt::format("Shader compiled: id={} stage={} hash=0x{:016x} words={} wave={}\n",
+		    shader_id, stage_name, options.shader_hash, result.spirv.size(), options.wave_size));
 		if (options.dump_ir) {
 			LOGF("%s SPIR-V words=%" PRIu64 " wave_size=%u\n", options.dump_label,
 			     static_cast<uint64_t>(result.spirv.size()), options.wave_size);
@@ -275,7 +278,7 @@ struct PipelineCache::ProgramCache {
 		return {
 		    .specialization = std::move(specialization),
 		    .program        = std::move(result.program).TakeCompiledInfo(),
-		    .handle         = {.id = ++next_shader_id, .module = module},
+		    .handle         = {.id = shader_id, .module = module},
 		};
 	}
 

@@ -1,9 +1,15 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "graphics/guest_gpu/gpu_defs.h"
+#include "graphics/host_gpu/graphicContext.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
@@ -111,6 +117,107 @@ constexpr auto MakeFormatLookup() {
 constexpr auto kFormatLookup = MakeFormatLookup();
 
 } // namespace
+
+void ReportDeviceFault(GraphicContext& graphics) {
+	// Other failing threads must wait for the first report before terminating.
+	std::lock_guard lock(graphics.device_fault_report_mutex);
+	if (graphics.device_fault_reported) {
+		return;
+	}
+	graphics.device_fault_reported = true;
+	try {
+		std::string report = fmt::format("GPU device-loss report\nGPU: {}\nDriver: 0x{:08x}\n",
+		                                 graphics.physical_device_properties.deviceName.data(),
+		                                 graphics.physical_device_properties.driverVersion);
+		std::vector<uint8_t> binary;
+		if (!graphics.device_fault_enabled ||
+		    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT == nullptr) {
+			report += "Native fault reporting is unavailable on this device.\n";
+		} else {
+			vk::DeviceFaultCountsEXT counts {};
+			const auto count_result = graphics.device.getFaultInfoEXT(&counts, nullptr);
+			report += fmt::format("Fault count query: {}\n", vk::to_string(count_result));
+			if (count_result == vk::Result::eSuccess) {
+				report += fmt::format(
+				    "Available addresses: {}, vendor records: {}, binary bytes: {}\n",
+				    counts.addressInfoCount, counts.vendorInfoCount, counts.vendorBinarySize);
+				// Bound allocations even when the driver supplies an unexpectedly large dump.
+				counts.addressInfoCount = std::min(counts.addressInfoCount, 4096u);
+				counts.vendorInfoCount  = std::min(counts.vendorInfoCount, 4096u);
+				counts.vendorBinarySize =
+				    std::min(counts.vendorBinarySize, vk::DeviceSize {64u * 1024u * 1024u});
+				std::vector<vk::DeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+				std::vector<vk::DeviceFaultVendorInfoEXT>  vendors(counts.vendorInfoCount);
+				binary.resize(static_cast<size_t>(counts.vendorBinarySize));
+				vk::DeviceFaultInfoEXT info {};
+				info.pAddressInfos     = addresses.empty() ? nullptr : addresses.data();
+				info.pVendorInfos      = vendors.empty() ? nullptr : vendors.data();
+				info.pVendorBinaryData = binary.empty() ? nullptr : binary.data();
+				const auto result      = graphics.device.getFaultInfoEXT(&counts, &info);
+				report += fmt::format("Fault detail query: {}\n", vk::to_string(result));
+				if (result == vk::Result::eSuccess || result == vk::Result::eIncomplete) {
+					const auto description = [](const auto& text) {
+						return std::string_view(
+						    text.data(), std::find(text.begin(), text.end(), '\0') - text.begin());
+					};
+					report += fmt::format("Description: {}\n", description(info.description));
+					for (size_t index = 0;
+					     index < std::min<size_t>(addresses.size(), counts.addressInfoCount);
+					     ++index) {
+						const auto& address = addresses[index];
+						report +=
+						    fmt::format("Address {}: type={} address=0x{:016x} precision={}\n",
+						                index, vk::to_string(address.addressType),
+						                address.reportedAddress, address.addressPrecision);
+					}
+					for (size_t index = 0;
+					     index < std::min<size_t>(vendors.size(), counts.vendorInfoCount);
+					     ++index) {
+						const auto& vendor = vendors[index];
+						report += fmt::format("Vendor {}: {} code=0x{:016x} data=0x{:016x}\n",
+						                      index, description(vendor.description),
+						                      vendor.vendorFaultCode, vendor.vendorFaultData);
+					}
+					binary.resize(std::min<size_t>(binary.size(), counts.vendorBinarySize));
+				} else {
+					binary.clear();
+				}
+			}
+		}
+		Log::WriteToConsoleAndLog(report);
+		std::error_code             error;
+		const std::filesystem::path directory = "_GpuCrashDumps";
+		std::filesystem::create_directories(directory, error);
+		if (error) {
+			Log::WriteToConsoleAndLog(
+			    fmt::format("Could not create GPU crash directory: {}\n", error.message()));
+			return;
+		}
+		const auto    timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+		                              std::chrono::system_clock::now().time_since_epoch())
+		                              .count();
+		const auto    prefix    = directory / fmt::format("gpu-fault-{}", timestamp);
+		std::ofstream text(prefix.string() + ".txt", std::ios::binary);
+		text << report;
+		text.close();
+		if (!text) {
+			Log::WriteToConsoleAndLog("Could not save GPU fault text report.\n");
+		}
+		if (!binary.empty()) {
+			std::ofstream dump(prefix.string() + ".bin", std::ios::binary);
+			dump.write(reinterpret_cast<const char*>(binary.data()),
+			           static_cast<std::streamsize>(binary.size()));
+			dump.close();
+			if (!dump) {
+				Log::WriteToConsoleAndLog("Could not save GPU fault binary dump.\n");
+			}
+		}
+		Log::WriteToConsoleAndLog(
+		    fmt::format("GPU fault reports: {}\n", std::filesystem::absolute(prefix).string()));
+	} catch (const std::exception& error) {
+		Log::WriteToConsoleAndLog(fmt::format("GPU fault reporting failed: {}\n", error.what()));
+	}
+}
 
 vk::Format VulkanFormat(Prospero::BufferFormat guest_format) {
 	const auto index = static_cast<size_t>(guest_format);

@@ -563,6 +563,9 @@ Swapchain::Status Swapchain::AcquireNextImage() {
 	const auto result = m_window.graphic_ctx.device.acquireNextImageKHR(
 	    m_handle, std::numeric_limits<uint64_t>::max(), m_image_acquired[m_frame_index], nullptr,
 	    &m_image_index);
+	if (result == vk::Result::eErrorDeviceLost) {
+		ReportDeviceFault(m_window.graphic_ctx);
+	}
 	switch (result) {
 		case vk::Result::eSuccess: break;
 		case vk::Result::eSuboptimalKHR:
@@ -846,6 +849,9 @@ Swapchain::Status Swapchain::Present() {
 	{
 		Common::LockGuard lock(m_window.graphic_ctx.queue_mutex);
 		result = m_window.graphic_ctx.queue.presentKHR(&present);
+	}
+	if (result == vk::Result::eErrorDeviceLost) {
+		ReportDeviceFault(m_window.graphic_ctx);
 	}
 	switch (result) {
 		case vk::Result::eSuccess: break;

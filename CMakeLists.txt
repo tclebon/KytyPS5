@@ -546,6 +546,13 @@ add_executable(user_service_tests EXCLUDE_FROM_ALL
 target_link_libraries(user_service_tests common fmt::fmt)
 target_include_directories(user_service_tests PRIVATE ${inc_headers})
 
+add_executable(gpu_fault_reporting_tests EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/GpuFaultReportingTests.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/host_gpu/vulkanCommon.cpp"
+)
+target_link_libraries(gpu_fault_reporting_tests common Vulkan::Headers fmt::fmt)
+target_include_directories(gpu_fault_reporting_tests PRIVATE ${inc_headers})
+
 add_executable(event_queue_lifetime_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/EventQueueLifetimeTests.cpp"
 	"${KYTY_SOURCE_DIR}/kernel/eventQueue.cpp"
@@ -645,6 +652,8 @@ if(BUILD_TESTING)
 	add_test(NAME save_data_dialog COMMAND $<TARGET_FILE:save_data_dialog_tests>)
 	add_test(NAME http_uri_parse COMMAND $<TARGET_FILE:http_uri_parse_tests>)
 	add_test(NAME user_service COMMAND $<TARGET_FILE:user_service_tests>)
+	add_test(NAME gpu_fault_reporting COMMAND $<TARGET_FILE:gpu_fault_reporting_tests>
+		"${PROJECT_BINARY_DIR}/gpu-fault-report-tests")
 	add_test(NAME shader_recompiler_compute COMMAND $<TARGET_FILE:shader_recompiler_compute_tests>)
 	add_test(NAME shader_recompiler_alignbyte
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --alignbyte-only)
@@ -692,6 +701,7 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --buffer-cache-range-only)
 
 	add_custom_target(kyty_tests DEPENDS
+		gpu_fault_reporting_tests
 		ime_dialog_tests
 		shader_cfg_tests
 		scalar_provenance_tests
