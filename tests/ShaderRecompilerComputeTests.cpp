@@ -31078,17 +31078,32 @@ TestCase FlatVirtualAddressRebasesGuestAllocation() {
   AppendVMovLiteral(&code, 21, static_cast<u32>(ExtendedBase >> 32u));
   code.push_back(EncodeFlat0(0x0c, 0, 0));
   code.push_back(EncodeFlat1(3, 0x7d, 0, 20));
+  // Invalid guest ranges must not alias mapped pages after packing or narrowing.
+  constexpr std::array<uint64_t, 3> InvalidAddresses{
+      Libs::Graphics::LOWER_ADDRESS_SIZE + GuestBase + 4u,
+      (uint64_t{1} << 46u) + Libs::LibKernel::Memory::kExtendedMemoryBase -
+          Libs::Graphics::LOWER_ADDRESS_SIZE + GuestBase + 4u,
+      (uint64_t{1} << 46u) + ExtendedBase + 4u};
+  for (u32 index = 0; index < InvalidAddresses.size(); ++index) {
+    const auto address = InvalidAddresses[index];
+    AppendVMovLiteral(&code, 20, static_cast<u32>(address));
+    AppendVMovLiteral(&code, 21, static_cast<u32>(address >> 32u));
+    code.push_back(EncodeFlat0(0x0c, 0, 0));
+    code.push_back(EncodeFlat1(4u + index, 0x7d, 0, 20));
+  }
   AppendStoreVgpr(&code, 0, 0);
   AppendStoreVgpr(&code, 1, 1);
   AppendStoreVgpr(&code, 2, 2);
   AppendStoreVgpr(&code, 3, 3);
+  for (u32 index = 0; index < InvalidAddresses.size(); ++index)
+    AppendStoreVgpr(&code, 4u + index, 4u + index);
   AppendEnd(&code);
 
   TestCase test;
   test.name = "FlatVirtualAddressRebasesGuestAllocation";
   test.code = std::move(code);
   test.initial = {0xfeedfaceu, 0xcafebabeu, 0, 0x12345678u};
-  test.expected = {0x12345678u, 0x12345678u, 0, 0xcafebabeu};
+  test.expected = {0x12345678u, 0x12345678u, 0, 0xcafebabeu, 0, 0, 0};
   test.bda_mappings = {{GuestBase, 8}, {ExtendedBase, 0}};
   test.opcodes = {O::V_MOV_B32, O::FLAT_LOAD_DWORD, O::BUFFER_STORE_DWORD,
                   O::S_ENDPGM};

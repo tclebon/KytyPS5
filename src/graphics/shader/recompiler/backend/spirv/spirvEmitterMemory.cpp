@@ -78,7 +78,7 @@ BufferAddress CalculateBufferAddress(EmitterState& state, uint32_t index, uint32
 
 uint32_t BufferLane(EmitterState& state) {
 	return Binary(state, spv::OpBitwiseAnd, TypeU32(state), EmitSubgroupLocalInvocationId(state),
-	              ConstantU32(state, 63));
+	              ConstantU32(state, state.program.wave_size - 1u));
 }
 
 uint32_t BufferByteAddress(ValueEmitContext& ctx, const IR::Inst& inst, const IR::MemoryInfo& mem) {
@@ -1142,6 +1142,24 @@ void DefineGetBdaPointer(EmitterState& state) {
 	                          spv::FunctionControlMaskNone, function_type);
 	state.builder.AddFunction(spv::OpFunctionParameter, type, address);
 	EmitLabel(state, entry_label);
+
+	// Validate the guest address before rebasing or narrowing its page index. Gap
+	// addresses otherwise alias extended memory, and high bits can wrap into a
+	// mapped page when the 64-bit page number is converted to a descriptor index.
+	const auto lower           = Binary(state, spv::OpULessThan, TypeBool(state), address,
+	                                    ConstantU64(state, LOWER_ADDRESS_SIZE));
+	const auto extended_offset = Binary(state, spv::OpISub, type, address,
+	                                    ConstantU64(state, LibKernel::Memory::kExtendedMemoryBase));
+	const auto in_extended     = Binary(state, spv::OpULessThan, TypeBool(state), extended_offset,
+	                                    ConstantU64(state, LibKernel::Memory::kExtendedMemorySize));
+	const auto valid         = Binary(state, spv::OpLogicalOr, TypeBool(state), lower, in_extended);
+	const auto valid_label   = state.builder.AllocateId();
+	const auto invalid_label = state.builder.AllocateId();
+	state.builder.AddFunction(spv::OpSelectionMerge, valid_label, spv::SelectionControlMaskNone);
+	state.builder.AddFunction(spv::OpBranchConditional, valid, valid_label, invalid_label);
+	EmitLabel(state, invalid_label);
+	state.builder.AddFunction(spv::OpReturnValue, ConstantU64(state, 0));
+	EmitLabel(state, valid_label);
 
 	const auto extended = Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), address,
 	                             ConstantU64(state, LibKernel::Memory::kExtendedMemoryBase));
