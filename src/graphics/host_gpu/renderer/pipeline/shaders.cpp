@@ -495,7 +495,7 @@ void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& p
 		dynamic_states.push_back(vk::DynamicState::eColorWriteEnableEXT);
 	}
 #endif
-	if (graphics.attachment_feedback_loop_enabled) {
+	if (graphics.dynamic_feedback_loop_enabled) {
 		dynamic_states.push_back(vk::DynamicState::eAttachmentFeedbackLoopEnableEXT);
 	}
 
@@ -504,6 +504,11 @@ void CreatePipelineInternal(GraphicContext& graphics, PipelineCache::Pipeline& p
 	dynamic_state.pDynamicStates    = dynamic_states.data();
 
 	vk::GraphicsPipelineCreateInfo  pipeline_info {};
+	if (graphics.attachment_feedback_loop_enabled && !graphics.dynamic_feedback_loop_enabled) {
+		// Layout support is sufficient; hosts without dynamic feedback state use
+		// the static pipeline flag instead of rejecting depth feedback draws.
+		pipeline_info.flags |= vk::PipelineCreateFlagBits::eDepthStencilAttachmentFeedbackLoopEXT;
+	}
 	vk::PipelineRenderingCreateInfo rendering_info {};
 	rendering_info.colorAttachmentCount    = rendering.color_count;
 	rendering_info.pColorAttachmentFormats = rendering.color_formats.data();
