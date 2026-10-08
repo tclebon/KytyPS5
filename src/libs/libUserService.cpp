@@ -92,15 +92,18 @@ static KYTY_SYSV_ABI int UserServiceGetLoginUserIdList(UserServiceLoginUserIdLis
 }
 
 static KYTY_SYSV_ABI int UserServiceGetUserName(int user_id, char* name, size_t size) {
+	if (name == nullptr) {
+		return USER_SERVICE_ERROR_INVALID_ARGUMENT;
+	}
 	if (user_id != Config::GetUserId()) {
 		return USER_SERVICE_ERROR_NOT_LOGGED_IN;
 	}
-	EXIT_NOT_IMPLEMENTED(size < 5);
 
 	const auto& user_name = Config::GetUserName();
-	int         s         = snprintf(name, size, "%s", user_name.c_str());
-
-	EXIT_NOT_IMPLEMENTED(static_cast<size_t>(s) >= size);
+	if (size <= user_name.size()) {
+		return USER_SERVICE_ERROR_BUFFER_TOO_SHORT;
+	}
+	std::memcpy(name, user_name.c_str(), user_name.size() + 1);
 
 	return OK;
 }
